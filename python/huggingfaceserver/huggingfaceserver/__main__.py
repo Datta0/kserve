@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import ast
 from pathlib import Path
 from typing import cast
 
@@ -105,6 +106,7 @@ parser.add_argument(
 parser.add_argument(
     "--return_token_type_ids", action="store_true", help="Return token type ids"
 )
+parser.add_argument('--lora_modules', required=False, help="Use if you're deploying LoRA models")
 
 parser = maybe_add_vllm_cli_parser(parser)
 
@@ -141,11 +143,19 @@ def load_model():
 
     if args.backend == Backend.vllm and not vllm_available():
         raise RuntimeError("Backend is set to 'vllm' but vLLM is not available")
+    
+    load_lora = False
+    if args.lora_modules:
+        args.lora_modules = ast.literal_eval(args.lora_modules)
+        if len(args.lora_modules) > 0:
+            load_lora = True
+        else:
+            args.lora_modules = None
 
     if (
         (args.backend == Backend.vllm or args.backend == Backend.auto)
         and vllm_available()
-        and infer_vllm_supported_from_model_architecture(model_id_or_path) is not None
+        and infer_vllm_supported_from_model_architecture(model_id_or_path)
     ):
         from .vllm.vllm_model import VLLMModel
 
@@ -202,7 +212,10 @@ def load_model():
                 trust_remote_code=kwargs["trust_remote_code"],
             )
         else:
-            # Convert dtype from string to torch dtype. Default to float32
+            if load_lora:
+                # I don't think any encoder model uses LoRA as of now. If you have a use case in mind, please feel free to contribute.
+                logger.info("LoRA not supported for encoder models. Running base model only")
+                load_lora = False
             dtype = kwargs.get("dtype", default_dtype)
             dtype = hf_dtype_map[dtype]
 
@@ -230,6 +243,8 @@ def load_model():
                 predictor_config=predictor_config,
             )
     model.load()
+    if load_lora:
+        model.load_lora(args.lora_modules)
     return model
 
 
@@ -238,6 +253,7 @@ if __name__ == "__main__":
         model = load_model()
         kserve.ModelServer().start([model] if model.ready else [])
     except Exception as e:
+        print(f'Error occured {e}')
         import sys
 
         logger.error(f"Failed to start model server: {e}")

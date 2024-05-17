@@ -31,6 +31,7 @@ from typing import (
 import torch
 from accelerate import init_empty_weights
 from kserve.logging import logger
+from peft import PeftConfig, PeftType
 from kserve.protocol.rest.openai import (
     ChatPrompt,
     CompletionRequest,
@@ -148,6 +149,7 @@ class HuggingfaceGenerativeModel(
         tokenizer_revision: Optional[str] = None,
         trust_remote_code: bool = False,
         system_fingerprint: Optional[str] = None,
+        lora_modules: Optional[Dict[str, str]] = None,
     ):
         super().__init__(name)
         self.model_config = model_config
@@ -161,6 +163,7 @@ class HuggingfaceGenerativeModel(
         self.trust_remote_code = trust_remote_code
         self._device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self._request_queue = queue.Queue()
+        self.lora_modules = lora_modules
 
         if model_config:
             self.model_config = model_config
@@ -244,6 +247,12 @@ class HuggingfaceGenerativeModel(
         Thread(target=self._process_requests).start()
         self.ready = True
         return self.ready
+    
+    def load_lora(self, lora_module_paths):
+        for module_name, module_path in lora_module_paths.items():
+            peft_config = PeftConfig.from_pretrained(module_path)
+            assert peft_config.peft_type == PeftType.LORA, f"Only LORA is the supported PEFT type. Current module {module_name} is of type {peft_config.peft_type}"
+            self.model.load_adapter(module_path, module_name)
 
     def stop(self):
         # Signal to the background thread that it should shut down

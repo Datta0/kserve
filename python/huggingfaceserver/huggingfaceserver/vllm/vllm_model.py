@@ -25,6 +25,8 @@ from kserve.protocol.rest.openai import (
 )
 from kserve.protocol.rest.openai.types import Completion
 from vllm.engine.async_llm_engine import AsyncLLMEngine
+from vllm.lora.request import LoRARequest
+from peft import PeftConfig, PeftType
 
 from .vllm_completions import OpenAIServingCompletion
 
@@ -45,10 +47,19 @@ class VLLMModel(Model, OpenAIChatAdapterModel):  # pylint:disable=c-extension-no
 
     def load(self) -> bool:
         self.vllm_engine_args.tensor_parallel_size = torch.cuda.device_count()
-        self.vllm_engine = AsyncLLMEngine.from_engine_args(self.vllm_engine_args)
+        self.vllm_engine = AsyncLLMEngine.from_engine_args(self.vllm_engine_args) 
         self.openai_serving_completion = OpenAIServingCompletion(self.vllm_engine)
         self.ready = True
         return self.ready
+    
+    def load_lora(self,lora_module_paths) -> None:
+        self.lora_requests = {}
+        for idx, (module_name, module_path) in enumerate(lora_module_paths.items()):
+            peft_config = PeftConfig.from_pretrained(module_path)
+            assert peft_config.peft_type == PeftType.LORA, f"Only LORA is the supported PEFT type. Current module {module_name} is of type {peft_config.peft_type}"
+            assert peft_config.r <= 64, f"vLLM only supports LoRA of rank <=64. Current module {module_name} has lora rank {peft_config.r}. Consider switching to huggingface backend"
+            self.lora_requests[module_name] = LoRARequest(module_name, idx+1, module_path)
+        return
 
     def apply_chat_template(
         self,
@@ -64,4 +75,11 @@ class VLLMModel(Model, OpenAIChatAdapterModel):  # pylint:disable=c-extension-no
     async def create_completion(
         self, request: CompletionRequest
     ) -> Union[Completion, AsyncIterator[Completion]]:
-        return await self.openai_serving_completion.create_completion(request)
+
+        lora_request = None
+        lora_module_name = request.lora_module
+        if lora_module_name is not None:
+            assert lora_module_name in self.lora_requests.keys(), f"Chosen lora adapter {lora_module_name} not in enabled adapters. Please choose one of {self.lora_requests.keys()}" if self.enable_lora else "LoRA not enabled for this deployment"
+            lora_request = self.lora_requests[lora_module_name]
+
+        return await self.openai_serving_completion.create_completion(request,lora_request)

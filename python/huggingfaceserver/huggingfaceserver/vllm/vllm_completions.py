@@ -16,6 +16,7 @@ import time
 import torch
 import asyncio
 from vllm.sampling_params import SamplingParams
+from vllm.lora.request import LoRARequest
 from vllm.utils import random_uuid
 from typing import (
     AsyncGenerator,
@@ -102,7 +103,7 @@ class OpenAIServingCompletion:
             loop.run_until_complete(self._post_init())
             loop.close()
 
-    async def create_completion(self, completion_request: CompletionRequest):
+    async def create_completion(self, completion_request: CompletionRequest, lora_request: Optional[LoRARequest]):
         """Completion API similar to OpenAI's API.
 
         See https://platform.openai.com/docs/api-reference/completions/create
@@ -148,6 +149,7 @@ class OpenAIServingCompletion:
                         sampling_params,
                         f"{request_id}-{i}",
                         prompt_token_ids=input_ids,
+                        lora_request=lora_request,
                     )
                 )
         except Exception as e:
